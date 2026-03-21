@@ -1,3 +1,7 @@
+# Copyright (c) 2026 Gregory Donarum. All rights reserved.
+# Licensed under the PolyForm Noncommercial License 1.0.0 — see LICENSE file.
+# Commercial use requires a separate written agreement with Gregory Donarum.
+
 import os
 import sys
 import json
