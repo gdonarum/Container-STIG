@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sample Nessus .nessus scan output for STIG Assist testing.
+  This simulates findings from a containerized RHEL 9 / UBI 9 application.
+  Use this to test the Findings Analyzer without real scan output.
+-->
+<NessusClientData_v2>
+  <Report name="Container STIG Test Scan" xmlns:cm="http://www.nessus.org/cm">
+    <ReportHost name="container-target">
+      <HostProperties>
+        <tag name="host-ip">172.17.0.2</tag>
+        <tag name="os">Red Hat Enterprise Linux 9</tag>
+        <tag name="hostname">app-container-01</tag>
+      </HostProperties>
+
+      <!-- CAT I: Running as root -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="4"
+                  pluginID="100001" pluginName="Container Running as Root User">
+        <description>The container process is running as root (UID 0). This violates DISA Container Platform SRG SRG-APP-000342-CTR-000775 and CIS Docker Benchmark 4.1. Running as root inside a container significantly increases the blast radius of a container escape vulnerability.</description>
+        <solution>Add a non-root USER instruction to the Dockerfile. Create a dedicated application user with minimum required permissions.</solution>
+        <plugin_output>Process 'java' running as UID 0 (root) inside container app-container-01.</plugin_output>
+        <stig_severity>I</stig_severity>
+        <vuln_publication_date>2023/01/01</vuln_publication_date>
+        <xref>DISA-STIG:SRG-APP-000342-CTR-000775</xref>
+        <xref>CIS:4.1</xref>
+      </ReportItem>
+
+      <!-- CAT I: Privileged container -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="4"
+                  pluginID="100002" pluginName="Container Running in Privileged Mode">
+        <description>The container is started with --privileged flag, granting it full access to the host kernel and all devices. This completely negates container isolation. Violates SRG-APP-000342-CTR-000775.</description>
+        <solution>Remove the --privileged flag from the container runtime configuration. Grant only the specific Linux capabilities required using --cap-add for specific capabilities needed.</solution>
+        <plugin_output>Container runtime flags include: --privileged=true</plugin_output>
+        <stig_severity>I</stig_severity>
+        <xref>DISA-STIG:SRG-APP-000342-CTR-000775</xref>
+      </ReportItem>
+
+      <!-- CAT II: No read-only filesystem -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="2"
+                  pluginID="100003" pluginName="Container Filesystem is Not Read-Only">
+        <description>The container root filesystem is writable. A read-only root filesystem prevents runtime tampering and limits persistence mechanisms available to an attacker. Violates CIS Docker Benchmark 5.12.</description>
+        <solution>Add --read-only flag to the container run command. Mount writable volumes only for paths that require write access (e.g., /tmp, application log directories).</solution>
+        <plugin_output>Container root filesystem mounted read-write.</plugin_output>
+        <stig_severity>II</stig_severity>
+        <xref>CIS:5.12</xref>
+      </ReportItem>
+
+      <!-- CAT II: SSHD running inside container -->
+      <ReportItem port="22" svc_name="ssh" protocol="tcp" severity="2"
+                  pluginID="100004" pluginName="SSH Server Running Inside Container">
+        <description>An SSH daemon (sshd) is running inside the container. Containers should be accessed via container runtime tools (docker exec, kubectl exec), not SSH. SSH inside containers creates unnecessary attack surface and complicates key management. Violates SRG-APP-000141-CTR-000315.</description>
+        <solution>Remove sshd from the container image. If remote access is required, use container platform tools (kubectl exec, docker exec) or implement a sidecar proxy pattern.</solution>
+        <plugin_output>sshd listening on port 22/tcp inside container.</plugin_output>
+        <stig_severity>II</stig_severity>
+        <xref>DISA-STIG:SRG-APP-000141-CTR-000315</xref>
+      </ReportItem>
+
+      <!-- CAT II: Outdated base image packages -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="2"
+                  pluginID="100005" pluginName="Critical Package Vulnerabilities in Base Image">
+        <description>Multiple packages in the base image contain known CVEs with CVSS scores above 7.0. Affected packages: openssl-3.0.1 (CVE-2022-0778, CVSS 7.5), curl-7.76.1 (CVE-2022-22576, CVSS 8.8), libxml2-2.9.10 (CVE-2022-23308, CVSS 7.4).</description>
+        <solution>Update all packages to current versions. Add 'RUN dnf update -y &amp;&amp; dnf clean all' to the Dockerfile. Implement a process to rebuild container images regularly to incorporate security patches.</solution>
+        <plugin_output>Vulnerable packages detected:
+  openssl-3.0.1 (CVE-2022-0778 CVSS:7.5)
+  curl-7.76.1 (CVE-2022-22576 CVSS:8.8)
+  libxml2-2.9.10 (CVE-2022-23308 CVSS:7.4)</plugin_output>
+        <stig_severity>II</stig_severity>
+        <xref>CVE:CVE-2022-0778</xref>
+        <xref>CVE:CVE-2022-22576</xref>
+      </ReportItem>
+
+      <!-- CAT II: No resource limits -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="2"
+                  pluginID="100006" pluginName="No CPU or Memory Resource Limits Configured">
+        <description>The container has no CPU or memory resource limits configured. Without limits, a compromised or malfunctioning container can consume all host resources, causing denial of service to other containers and host services. Violates SRG-APP-000435-CTR-001070.</description>
+        <solution>Configure resource limits using --memory, --cpus flags or Kubernetes resource requests/limits in the pod spec. Recommended starting point: set limits based on application profiling.</solution>
+        <plugin_output>Container resource limits: memory=unlimited, cpu=unlimited</plugin_output>
+        <stig_severity>II</stig_severity>
+        <xref>DISA-STIG:SRG-APP-000435-CTR-001070</xref>
+      </ReportItem>
+
+      <!-- CAT III: No HEALTHCHECK -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="1"
+                  pluginID="100007" pluginName="No HEALTHCHECK Instruction in Dockerfile">
+        <description>The Dockerfile does not include a HEALTHCHECK instruction. Without a health check, the container orchestrator cannot detect application-level failures and cannot restart unhealthy containers. Violates CIS Docker Benchmark 4.6.</description>
+        <solution>Add a HEALTHCHECK instruction to the Dockerfile. For HTTP services, use: HEALTHCHECK --interval=30s --timeout=3s CMD curl -f http://localhost:8080/health || exit 1</solution>
+        <plugin_output>No HEALTHCHECK instruction found in container configuration.</plugin_output>
+        <stig_severity>III</stig_severity>
+        <xref>CIS:4.6</xref>
+      </ReportItem>
+
+      <!-- CAT III: Image not using content trust -->
+      <ReportItem port="0" svc_name="general" protocol="tcp" severity="1"
+                  pluginID="100008" pluginName="Docker Content Trust Not Enforced">
+        <description>Docker Content Trust (DOCKER_CONTENT_TRUST=1) is not enforced in the build pipeline. Without content trust, images can be pulled and run without verifying their digital signature, allowing supply chain tampering. Violates SRG-APP-000515-CTR-001325.</description>
+        <solution>Set DOCKER_CONTENT_TRUST=1 in the CI/CD pipeline environment. Sign images with Notary or Cosign as part of the build process. Verify signatures before deployment.</solution>
+        <plugin_output>DOCKER_CONTENT_TRUST environment variable not set in build environment.</plugin_output>
+        <stig_severity>III</stig_severity>
+        <xref>DISA-STIG:SRG-APP-000515-CTR-001325</xref>
+      </ReportItem>
+
+    </ReportHost>
+  </Report>
+</NessusClientData_v2>

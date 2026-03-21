@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>STIG Assist</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            cat1: '#ef4444',
+            cat2: '#f59e0b',
+            cat3: '#3b82f6',
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Consolas', 'monospace'],
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Segoe UI', system-ui, sans-serif; }
+    .mono { font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace; }
+    .tab-active { border-bottom: 2px solid #3b82f6; color: #93c5fd; }
+    .tab-inactive { border-bottom: 2px solid transparent; color: #6b7280; }
+    .tab-inactive:hover { color: #d1d5db; }
+    .finding-card { transition: all 0.15s ease; }
+    .finding-card:hover { transform: translateX(2px); }
+    .diff-line-add { background: rgba(34,197,94,0.12); border-left: 3px solid #22c55e; }
+    .diff-line-remove { background: rgba(239,68,68,0.12); border-left: 3px solid #ef4444; }
+    .diff-line-same { border-left: 3px solid transparent; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1f2937; }
+    ::-webkit-scrollbar-thumb { background: #374151; border-radius: 3px; }
+    textarea { resize: vertical; }
+    .spinner { animation: spin 1s linear infinite; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    .fade-in { animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen">
+
+  <!-- Header -->
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <div class="bg-blue-600 rounded px-2 py-1 text-xs font-bold tracking-widest mono">STIG</div>
+      <h1 class="text-lg font-semibold tracking-tight">STIG Assist</h1>
+      <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">v1.0</span>
+    </div>
+    <div class="text-xs text-gray-500">Powered by Claude Sonnet</div>
+  </header>
+
+  <!-- Tab Bar -->
+  <nav class="bg-gray-900 border-b border-gray-800 px-6 flex gap-6">
+    <button onclick="switchTab('findings')" id="tab-findings"
+      class="tab-active py-3 text-sm font-medium transition-colors">
+      Findings Analyzer
+    </button>
+    <button onclick="switchTab('harden')" id="tab-harden"
+      class="tab-inactive py-3 text-sm font-medium transition-colors">
+      Dockerfile Hardener
+    </button>
+    <button onclick="switchTab('poam')" id="tab-poam"
+      class="tab-inactive py-3 text-sm font-medium transition-colors">
+      POA&amp;M Helper
+    </button>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
+
+    <!-- ====== TAB 1: FINDINGS ANALYZER ====== -->
+    <div id="panel-findings" class="tab-panel">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Input Panel -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Input</h2>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Base Image</label>
+              <input id="base-image" type="text" placeholder="e.g. ubi9/ubi, ubuntu:22.04"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                       focus:outline-none focus:border-blue-500 placeholder-gray-600" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Container Purpose</label>
+              <input id="container-purpose" type="text" placeholder="e.g. Java API server"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                       focus:outline-none focus:border-blue-500 placeholder-gray-600" />
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs text-gray-400">Nessus/SCAP XML or Finding Text</label>
+              <button onclick="loadSample()" class="text-xs text-blue-400 hover:text-blue-300 transition-colors">
+                Load Sample
+              </button>
+            </div>
+            <textarea id="findings-input" rows="14"
+              placeholder="Paste Nessus .nessus XML, SCAP XCCDF results, or describe findings in plain text..."
+              class="mono w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs
+                     focus:outline-none focus:border-blue-500 placeholder-gray-600"></textarea>
+          </div>
+
+          <button onclick="analyzeFindings()"
+            class="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 transition-colors
+                   rounded py-2.5 text-sm font-semibold flex items-center justify-center gap-2"
+            id="btn-analyze">
+            Analyze Findings
+          </button>
+        </div>
+
+        <!-- Results Panel -->
+        <div id="findings-results" class="space-y-4">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Results</h2>
+            <span id="findings-badge" class="hidden text-xs text-gray-500"></span>
+          </div>
+          <div id="findings-placeholder" class="text-gray-600 text-sm mt-8 text-center">
+            Enter findings and click Analyze to see results.
+          </div>
+          <div id="findings-output" class="hidden space-y-3"></div>
+        </div>
+      </div>
+
+      <!-- Hardened Dockerfile Output (full width, shown after analysis) -->
+      <div id="hardened-section" class="hidden mt-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Generated Hardened Dockerfile</h2>
+          <button onclick="copyHardenedDockerfile()"
+            class="text-xs text-blue-400 hover:text-blue-300 transition-colors">
+            Copy to Clipboard
+          </button>
+        </div>
+        <pre id="hardened-dockerfile" class="mono bg-gray-900 border border-gray-700 rounded p-4
+             text-xs text-green-300 overflow-x-auto whitespace-pre-wrap"></pre>
+      </div>
+    </div>
+
+
+    <!-- ====== TAB 2: DOCKERFILE HARDENER ====== -->
+    <div id="panel-harden" class="tab-panel hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Input -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Input</h2>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Target STIG / SRG</label>
+            <select id="stig-target"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                     focus:outline-none focus:border-blue-500">
+              <option>DISA Container Platform SRG</option>
+              <option>RHEL 8 STIG</option>
+              <option>RHEL 9 STIG</option>
+              <option>Ubuntu 20.04 STIG</option>
+              <option>Ubuntu 22.04 STIG</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Existing Dockerfile</label>
+            <textarea id="dockerfile-input" rows="20"
+              placeholder="Paste your Dockerfile here..."
+              class="mono w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs
+                     focus:outline-none focus:border-blue-500 placeholder-gray-600"></textarea>
+          </div>
+
+          <button onclick="hardenDockerfile()"
+            class="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 transition-colors
+                   rounded py-2.5 text-sm font-semibold flex items-center justify-center gap-2"
+            id="btn-harden">
+            Harden Dockerfile
+          </button>
+        </div>
+
+        <!-- Results -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Results</h2>
+          <div id="harden-placeholder" class="text-gray-600 text-sm mt-8 text-center">
+            Paste a Dockerfile and click Harden to see results.
+          </div>
+          <div id="harden-output" class="hidden space-y-4">
+            <div id="harden-warnings" class="hidden"></div>
+            <div>
+              <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Changes Made</span>
+                <button onclick="copyHardenedOutput()"
+                  class="text-xs text-blue-400 hover:text-blue-300 transition-colors">Copy Hardened</button>
+              </div>
+              <div id="harden-changes" class="space-y-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Diff View -->
+      <div id="diff-section" class="hidden mt-6 space-y-3">
+        <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Diff View</h2>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Original</div>
+            <pre id="diff-original" class="mono bg-gray-900 border border-gray-700 rounded p-3
+                 text-xs overflow-x-auto whitespace-pre"></pre>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1">Hardened</div>
+            <pre id="diff-hardened" class="mono bg-gray-900 border border-gray-700 rounded p-3
+                 text-xs overflow-x-auto whitespace-pre"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ====== TAB 3: POA&M HELPER ====== -->
+    <div id="panel-poam" class="tab-panel hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Input -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Input</h2>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">System Name</label>
+              <input id="system-name" type="text" placeholder="e.g. ACME Payment Service"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                       focus:outline-none focus:border-blue-500 placeholder-gray-600" />
+            </div>
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">Responsible Party</label>
+              <input id="responsible-party" type="text" placeholder="e.g. Jane Smith / ISSO"
+                class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                       focus:outline-none focus:border-blue-500 placeholder-gray-600" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Findings (text or paste from Tab 1)</label>
+            <textarea id="poam-input" rows="14"
+              placeholder="Describe findings or paste finding details from the Findings Analyzer..."
+              class="mono w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs
+                     focus:outline-none focus:border-blue-500 placeholder-gray-600"></textarea>
+          </div>
+
+          <button onclick="generatePoam()"
+            class="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 transition-colors
+                   rounded py-2.5 text-sm font-semibold flex items-center justify-center gap-2"
+            id="btn-poam">
+            Generate POA&amp;M
+          </button>
+        </div>
+
+        <!-- Results -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">POA&amp;M Entries</h2>
+          <div id="poam-placeholder" class="text-gray-600 text-sm mt-8 text-center">
+            Enter findings and click Generate to produce POA&amp;M entries.
+          </div>
+          <div id="poam-output" class="hidden space-y-4"></div>
+        </div>
+      </div>
+
+      <!-- Plain Text Export -->
+      <div id="poam-export-section" class="hidden mt-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Plain Text Export</h2>
+          <button onclick="copyPoam()"
+            class="text-xs text-blue-400 hover:text-blue-300 transition-colors">
+            Copy to Clipboard
+          </button>
+        </div>
+        <pre id="poam-text" class="mono bg-gray-900 border border-gray-700 rounded p-4
+             text-xs text-gray-300 overflow-x-auto whitespace-pre-wrap max-h-96"></pre>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Global Error Toast -->
+  <div id="error-toast" class="hidden fixed bottom-4 right-4 bg-red-900 border border-red-700
+       text-red-100 px-4 py-3 rounded shadow-xl text-sm max-w-md z-50">
+    <div class="flex items-start gap-2">
+      <span class="text-red-400 font-bold mt-0.5">✕</span>
+      <span id="error-message"></span>
+    </div>
+  </div>
+
+<script>
+// ─── Tab Management ───────────────────────────────────────────────────────────
+function switchTab(name) {
+  ['findings', 'harden', 'poam'].forEach(t => {
+    document.getElementById('panel-' + t).classList.add('hidden');
+    document.getElementById('tab-' + t).className = 'tab-inactive py-3 text-sm font-medium transition-colors';
+  });
+  document.getElementById('panel-' + name).classList.remove('hidden');
+  document.getElementById('tab-' + name).className = 'tab-active py-3 text-sm font-medium transition-colors';
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+function showError(msg) {
+  const toast = document.getElementById('error-toast');
+  document.getElementById('error-message').textContent = msg;
+  toast.classList.remove('hidden');
+  setTimeout(() => toast.classList.add('hidden'), 6000);
+}
+
+function setLoading(btnId, loading, defaultText) {
+  const btn = document.getElementById(btnId);
+  if (loading) {
+    btn.disabled = true;
+    btn.innerHTML = `<svg class="spinner w-4 h-4" viewBox="0 0 24 24" fill="none">
+      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
+    </svg> Processing…`;
+  } else {
+    btn.disabled = false;
+    btn.textContent = defaultText;
+  }
+}
+
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function severityBadge(sev) {
+  const map = {
+    'CAT I':   'bg-red-900 text-red-300 border border-red-700',
+    'CAT II':  'bg-amber-900 text-amber-300 border border-amber-700',
+    'CAT III': 'bg-blue-900 text-blue-300 border border-blue-700',
+  };
+  return `<span class="text-xs px-1.5 py-0.5 rounded font-mono font-bold ${map[sev] || 'bg-gray-800 text-gray-400'}">${escapeHtml(sev)}</span>`;
+}
+
+function riskBadge(risk) {
+  const map = {
+    HIGH:   'bg-red-900 text-red-300',
+    MEDIUM: 'bg-amber-900 text-amber-300',
+    LOW:    'bg-green-900 text-green-300',
+  };
+  return `<span class="text-sm font-bold px-2 py-0.5 rounded ${map[risk] || 'bg-gray-800 text-gray-400'}">${risk}</span>`;
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch(e) {
+    // Fallback
+    const el = document.createElement('textarea');
+    el.value = text;
+    document.body.appendChild(el);
+    el.select();
+    document.execCommand('copy');
+    document.body.removeChild(el);
+  }
+}
+
+// ─── Tab 1: Findings Analyzer ─────────────────────────────────────────────────
+async function loadSample() {
+  try {
+    const r = await fetch('/api/sample');
+    const data = await r.json();
+    if (data.xml) {
+      document.getElementById('findings-input').value = data.xml;
+    } else {
+      showError(data.error || 'Failed to load sample');
+    }
+  } catch(e) {
+    showError('Failed to load sample: ' + e.message);
+  }
+}
+
+let lastAnalysisResult = null;
+
+async function analyzeFindings() {
+  const findingsText = document.getElementById('findings-input').value.trim();
+  if (!findingsText) { showError('Please enter findings text or XML.'); return; }
+
+  setLoading('btn-analyze', true, 'Analyze Findings');
+  document.getElementById('findings-placeholder').classList.add('hidden');
+  document.getElementById('findings-output').classList.add('hidden');
+  document.getElementById('hardened-section').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        findings_text: findingsText,
+        base_image: document.getElementById('base-image').value.trim(),
+        container_purpose: document.getElementById('container-purpose').value.trim(),
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showError(data.error || 'Analysis failed'); return; }
+    lastAnalysisResult = data;
+    renderFindingsResults(data);
+  } catch(e) {
+    showError('Network error: ' + e.message);
+  } finally {
+    setLoading('btn-analyze', false, 'Analyze Findings');
+  }
+}
+
+function renderFindingsResults(data) {
+  const out = document.getElementById('findings-output');
+  const badge = document.getElementById('findings-badge');
+  out.innerHTML = '';
+
+  // Summary card
+  const s = data.summary || {};
+  const total = (s.cat1_count || 0) + (s.cat2_count || 0) + (s.cat3_count || 0);
+  badge.textContent = `${total} finding${total !== 1 ? 's' : ''}`;
+  badge.classList.remove('hidden');
+
+  out.innerHTML += `
+    <div class="bg-gray-900 border border-gray-700 rounded p-4 fade-in">
+      <div class="flex items-center gap-3 mb-2">
+        <span class="text-xs text-gray-400 font-semibold uppercase tracking-wider">Overall Risk</span>
+        ${riskBadge(s.overall_risk || 'UNKNOWN')}
+      </div>
+      <p class="text-sm text-gray-300 mb-3">${escapeHtml(s.narrative || '')}</p>
+      <div class="flex gap-4 text-xs">
+        <span class="text-red-400 font-mono"><span class="font-bold">${s.cat1_count || 0}</span> CAT I</span>
+        <span class="text-amber-400 font-mono"><span class="font-bold">${s.cat2_count || 0}</span> CAT II</span>
+        <span class="text-blue-400 font-mono"><span class="font-bold">${s.cat3_count || 0}</span> CAT III</span>
+      </div>
+    </div>`;
+
+  // Sort findings CAT I → II → III
+  const sevOrder = {'CAT I': 0, 'CAT II': 1, 'CAT III': 2};
+  const findings = (data.findings || []).slice().sort((a,b) =>
+    (sevOrder[a.severity] ?? 9) - (sevOrder[b.severity] ?? 9));
+
+  findings.forEach((f, i) => {
+    const borderColor = f.severity === 'CAT I' ? 'border-red-800' :
+                        f.severity === 'CAT II' ? 'border-amber-800' : 'border-blue-800';
+    const id = `finding-${i}`;
+    out.innerHTML += `
+      <div class="finding-card bg-gray-900 border ${borderColor} rounded fade-in">
+        <button onclick="toggleFinding('${id}')"
+          class="w-full text-left px-4 py-3 flex items-start justify-between gap-2">
+          <div class="flex items-center gap-2 flex-wrap">
+            ${severityBadge(f.severity)}
+            <span class="mono text-xs text-gray-500">${escapeHtml(f.check_id || '')}</span>
+            <span class="text-sm font-medium text-gray-200">${escapeHtml(f.title || '')}</span>
+            ${f.requires_human_judgment ? '<span class="text-xs bg-purple-900 text-purple-300 border border-purple-700 px-1.5 py-0.5 rounded">Needs Review</span>' : ''}
+          </div>
+          <span class="text-gray-500 text-sm shrink-0" id="arrow-${id}">▶</span>
+        </button>
+        <div id="${id}" class="hidden px-4 pb-4 space-y-3 border-t border-gray-800 pt-3">
+          <div>
+            <div class="text-xs text-gray-500 mb-1 uppercase tracking-wider">Plain Language</div>
+            <p class="text-sm text-gray-300">${escapeHtml(f.plain_english || '')}</p>
+          </div>
+          <div>
+            <div class="text-xs text-gray-500 mb-1 uppercase tracking-wider">Remediation</div>
+            <p class="text-sm text-gray-300">${escapeHtml(f.remediation || '')}</p>
+          </div>
+          ${f.dockerfile_fix ? `
+          <div>
+            <div class="text-xs text-gray-500 mb-1 uppercase tracking-wider">Dockerfile Fix</div>
+            <pre class="mono bg-gray-950 border border-gray-700 rounded p-3 text-xs text-green-300 overflow-x-auto">${escapeHtml(f.dockerfile_fix)}</pre>
+          </div>` : ''}
+          ${f.requires_human_judgment && f.human_judgment_note ? `
+          <div class="bg-purple-950 border border-purple-800 rounded p-3">
+            <div class="text-xs text-purple-400 font-semibold mb-1">Requires Human Judgment</div>
+            <p class="text-sm text-purple-200">${escapeHtml(f.human_judgment_note)}</p>
+          </div>` : ''}
+        </div>
+      </div>`;
+  });
+
+  out.classList.remove('hidden');
+
+  // Hardened Dockerfile
+  if (data.hardened_dockerfile) {
+    document.getElementById('hardened-dockerfile').textContent = data.hardened_dockerfile;
+    document.getElementById('hardened-section').classList.remove('hidden');
+  }
+}
+
+function toggleFinding(id) {
+  const el = document.getElementById(id);
+  const arrow = document.getElementById('arrow-' + id);
+  const hidden = el.classList.toggle('hidden');
+  arrow.textContent = hidden ? '▶' : '▼';
+}
+
+async function copyHardenedDockerfile() {
+  const content = document.getElementById('hardened-dockerfile').textContent;
+  await copyText(content);
+}
+
+
+// ─── Tab 2: Dockerfile Hardener ───────────────────────────────────────────────
+let lastHardenResult = null;
+
+async function hardenDockerfile() {
+  const dockerfile = document.getElementById('dockerfile-input').value.trim();
+  if (!dockerfile) { showError('Please paste a Dockerfile.'); return; }
+
+  setLoading('btn-harden', true, 'Harden Dockerfile');
+  document.getElementById('harden-placeholder').classList.add('hidden');
+  document.getElementById('harden-output').classList.add('hidden');
+  document.getElementById('diff-section').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/api/harden', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        dockerfile,
+        stig_target: document.getElementById('stig-target').value,
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showError(data.error || 'Hardening failed'); return; }
+    lastHardenResult = data;
+    renderHardenResults(data, dockerfile);
+  } catch(e) {
+    showError('Network error: ' + e.message);
+  } finally {
+    setLoading('btn-harden', false, 'Harden Dockerfile');
+  }
+}
+
+function renderHardenResults(data, original) {
+  const out = document.getElementById('harden-output');
+  const changes = document.getElementById('harden-changes');
+  changes.innerHTML = '';
+
+  // Warnings
+  const warnDiv = document.getElementById('harden-warnings');
+  if (data.warnings && data.warnings.length > 0) {
+    warnDiv.classList.remove('hidden');
+    warnDiv.innerHTML = data.warnings.map(w =>
+      `<div class="bg-amber-950 border border-amber-800 rounded px-3 py-2 text-xs text-amber-200 flex gap-2">
+        <span class="text-amber-400">⚠</span> ${escapeHtml(w)}
+      </div>`
+    ).join('');
+  } else {
+    warnDiv.classList.add('hidden');
+  }
+
+  // Changes list
+  (data.changes || []).forEach(c => {
+    const typeColor = c.change_type === 'ADDED' ? 'text-green-400' :
+                      c.change_type === 'REMOVED' ? 'text-red-400' : 'text-amber-400';
+    changes.innerHTML += `
+      <div class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs fade-in">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="${typeColor} font-mono font-bold">${escapeHtml(c.change_type)}</span>
+          <span class="text-gray-500 mono">${escapeHtml(c.line_reference || '')}</span>
+          <span class="text-gray-500">·</span>
+          <span class="text-blue-400 mono">${escapeHtml(c.stig_reference || '')}</span>
+        </div>
+        <p class="text-gray-300">${escapeHtml(c.description || '')}</p>
+      </div>`;
+  });
+
+  out.classList.remove('hidden');
+
+  // Diff view
+  if (data.hardened_dockerfile) {
+    renderDiff(original, data.hardened_dockerfile);
+    document.getElementById('diff-section').classList.remove('hidden');
+  }
+}
+
+function renderDiff(original, hardened) {
+  document.getElementById('diff-original').textContent = original;
+  document.getElementById('diff-hardened').textContent = hardened;
+}
+
+async function copyHardenedOutput() {
+  if (lastHardenResult && lastHardenResult.hardened_dockerfile) {
+    await copyText(lastHardenResult.hardened_dockerfile);
+  }
+}
+
+
+// ─── Tab 3: POA&M Helper ─────────────────────────────────────────────────────
+let lastPoamResult = null;
+
+async function generatePoam() {
+  const findingsText = document.getElementById('poam-input').value.trim();
+  if (!findingsText) { showError('Please enter findings text.'); return; }
+
+  setLoading('btn-poam', true, 'Generate POA&M');
+  document.getElementById('poam-placeholder').classList.add('hidden');
+  document.getElementById('poam-output').classList.add('hidden');
+  document.getElementById('poam-export-section').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/api/poam', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        findings_text: findingsText,
+        system_name: document.getElementById('system-name').value.trim(),
+        responsible_party: document.getElementById('responsible-party').value.trim(),
+      })
+    });
+    const data = await resp.json();
+    if (!resp.ok) { showError(data.error || 'POA&M generation failed'); return; }
+    lastPoamResult = data;
+    renderPoamResults(data);
+  } catch(e) {
+    showError('Network error: ' + e.message);
+  } finally {
+    setLoading('btn-poam', false, 'Generate POA&M');
+  }
+}
+
+function renderPoamResults(data) {
+  const out = document.getElementById('poam-output');
+  out.innerHTML = '';
+
+  (data.poam_entries || []).forEach(entry => {
+    out.innerHTML += `
+      <div class="bg-gray-900 border border-gray-700 rounded p-4 fade-in space-y-2">
+        <div class="flex items-start justify-between gap-2 flex-wrap">
+          <div class="flex items-center gap-2">
+            <span class="mono text-xs text-gray-500 font-bold">${escapeHtml(entry.poam_id || '')}</span>
+            ${severityBadge(entry.severity)}
+            <span class="mono text-xs text-gray-500">${escapeHtml(entry.check_id || '')}</span>
+          </div>
+        </div>
+        <div class="text-sm font-semibold text-gray-200">${escapeHtml(entry.weakness_name || '')}</div>
+        <p class="text-sm text-gray-400">${escapeHtml(entry.weakness_description || '')}</p>
+        <div class="grid grid-cols-2 gap-2 text-xs pt-1">
+          <div>
+            <span class="text-gray-500">Resources Required: </span>
+            <span class="text-gray-300">${escapeHtml(entry.resources_required || 'TBD')}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Responsible Party: </span>
+            <span class="text-gray-300">${escapeHtml(entry.responsible_party || 'TBD')}</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Scheduled Completion: </span>
+            <span class="text-amber-300 font-medium">[LEAVE_BLANK]</span>
+          </div>
+          <div>
+            <span class="text-gray-500">Status: </span>
+            <span class="text-gray-300">${escapeHtml(entry.status || 'Ongoing')}</span>
+          </div>
+        </div>
+        ${entry.milestones && entry.milestones.length > 0 ? `
+        <div class="pt-1">
+          <div class="text-xs text-gray-500 uppercase tracking-wider mb-1">Milestones</div>
+          <ol class="space-y-1">
+            ${entry.milestones.map(m => `
+              <li class="text-xs text-gray-300 flex gap-2">
+                <span class="text-gray-600 font-mono">${m.milestone_number}.</span>
+                <span>${escapeHtml(m.milestone_description)}</span>
+                <span class="text-amber-300 ml-auto shrink-0">[Date TBD]</span>
+              </li>`).join('')}
+          </ol>
+        </div>` : ''}
+        ${entry.comments ? `
+        <div class="text-xs text-gray-500 italic pt-1">${escapeHtml(entry.comments)}</div>` : ''}
+      </div>`;
+  });
+
+  out.classList.remove('hidden');
+
+  if (data.plain_text_export) {
+    document.getElementById('poam-text').textContent = data.plain_text_export;
+    document.getElementById('poam-export-section').classList.remove('hidden');
+  }
+}
+
+async function copyPoam() {
+  const text = document.getElementById('poam-text').textContent;
+  await copyText(text);
+}
+</script>
+</body>
+</html>
