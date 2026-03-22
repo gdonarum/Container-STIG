@@ -1,0 +1,15 @@
+# Render.com one-click deploy configuration
+# Sign up at render.com, connect your GitHub repo, and Render will find this file.
+# Set ANTHROPIC_API_KEY in the Render dashboard under Environment.
+
+services:
+  - type: web
+    name: stig-assist
+    env: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: ANTHROPIC_API_KEY
+        sync: false   # Must be set manually in Render dashboard
+    healthCheckPath: /
+    autoDeploy: true  # Auto-deploys when main branch is updated
