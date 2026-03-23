@@ -68,6 +68,9 @@
           <input type="checkbox" id="remember-key" class="rounded bg-gray-800 border-gray-700" />
           <span>Remember</span>
         </label>
+        <button onclick="clearApiKey()" id="btn-clear-key" class="hidden text-xs text-red-400 hover:text-red-300 transition-colors">
+          Clear
+        </button>
         <span id="api-key-status" class="text-xs px-1.5 py-0.5 rounded bg-red-900 text-red-300">Not Set</span>
       </div>
       <div class="text-xs text-gray-500">Powered by Claude Sonnet</div>
@@ -389,13 +392,24 @@ function initApiKey() {
 
 function updateApiKeyStatus(isSet) {
   const status = document.getElementById('api-key-status');
+  const clearBtn = document.getElementById('btn-clear-key');
   if (isSet) {
     status.textContent = 'Set';
     status.className = 'text-xs px-1.5 py-0.5 rounded bg-green-900 text-green-300';
+    clearBtn.classList.remove('hidden');
   } else {
     status.textContent = 'Not Set';
     status.className = 'text-xs px-1.5 py-0.5 rounded bg-red-900 text-red-300';
+    clearBtn.classList.add('hidden');
   }
+}
+
+function clearApiKey() {
+  apiKey = '';
+  document.getElementById('api-key-input').value = '';
+  document.getElementById('remember-key').checked = false;
+  localStorage.removeItem('stig_assist_api_key');
+  updateApiKeyStatus(false);
 }
 
 function toggleApiKeyVisibility() {
@@ -476,18 +490,70 @@ function showError(msg) {
   setTimeout(() => toast.classList.add('hidden'), 6000);
 }
 
+// Loading state with elapsed time indicator
+const loadingTimers = {};
+
 function setLoading(btnId, loading, defaultText) {
   const btn = document.getElementById(btnId);
   if (loading) {
     btn.disabled = true;
+    btn._startTime = Date.now();
     btn.innerHTML = `<svg class="spinner w-4 h-4" viewBox="0 0 24 24" fill="none">
       <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
       <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-    </svg> Processing…`;
+    </svg> <span id="${btnId}-timer">Processing... 0s</span>`;
+
+    // Update timer every second
+    loadingTimers[btnId] = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - btn._startTime) / 1000);
+      const timerEl = document.getElementById(`${btnId}-timer`);
+      if (timerEl) {
+        timerEl.textContent = `Processing... ${elapsed}s`;
+      }
+    }, 1000);
   } else {
+    if (loadingTimers[btnId]) {
+      clearInterval(loadingTimers[btnId]);
+      delete loadingTimers[btnId];
+    }
     btn.disabled = false;
     btn.textContent = defaultText;
   }
+}
+
+// ─── Input Validation ──────────────────────────────────────────────────────────
+const MAX_INPUT_SIZE = 500000; // 500KB max input size
+
+function validateInput(text, fieldName) {
+  if (!text || !text.trim()) {
+    return { valid: false, error: `Please enter ${fieldName}.` };
+  }
+  if (text.length > MAX_INPUT_SIZE) {
+    return { valid: false, error: `Input too large (${Math.round(text.length/1000)}KB). Maximum is ${MAX_INPUT_SIZE/1000}KB.` };
+  }
+  return { valid: true };
+}
+
+function validateXmlInput(text) {
+  const validation = validateInput(text, 'findings text or XML');
+  if (!validation.valid) return validation;
+
+  // Basic XML structure check if it looks like XML
+  const trimmed = text.trim();
+  if (trimmed.startsWith('<') && trimmed.endsWith('>')) {
+    // Check for basic XML validity
+    if (!trimmed.includes('<?xml') && !trimmed.match(/<[a-zA-Z]/)) {
+      return { valid: false, error: 'Input appears to be XML but may be malformed. Please check the format.' };
+    }
+    // Check for unclosed tags (basic check)
+    const openTags = (trimmed.match(/<[a-zA-Z][^/>]*>/g) || []).length;
+    const closeTags = (trimmed.match(/<\/[a-zA-Z][^>]*>/g) || []).length;
+    const selfClose = (trimmed.match(/<[^>]+\/>/g) || []).length;
+    if (Math.abs(openTags - closeTags - selfClose) > 10) {
+      return { valid: false, error: 'XML appears to have mismatched tags. Please verify the input.' };
+    }
+  }
+  return { valid: true };
 }
 
 function escapeHtml(s) {
@@ -544,7 +610,8 @@ let lastAnalysisResult = null;
 
 async function analyzeFindings() {
   const findingsText = document.getElementById('findings-input').value.trim();
-  if (!findingsText) { showError('Please enter findings text or XML.'); return; }
+  const validation = validateXmlInput(findingsText);
+  if (!validation.valid) { showError(validation.error); return; }
 
   const baseImage = document.getElementById('base-image').value.trim() || 'Not specified';
   const containerPurpose = document.getElementById('container-purpose').value.trim() || 'Not specified';
@@ -696,7 +763,8 @@ let lastHardenResult = null;
 
 async function hardenDockerfile() {
   const dockerfile = document.getElementById('dockerfile-input').value.trim();
-  if (!dockerfile) { showError('Please paste a Dockerfile.'); return; }
+  const validation = validateInput(dockerfile, 'a Dockerfile');
+  if (!validation.valid) { showError(validation.error); return; }
 
   const stigTarget = document.getElementById('stig-target').value;
 
@@ -806,7 +874,8 @@ let lastPoamResult = null;
 
 async function generatePoam() {
   const findingsText = document.getElementById('poam-input').value.trim();
-  if (!findingsText) { showError('Please enter findings text.'); return; }
+  const validation = validateInput(findingsText, 'findings text');
+  if (!validation.valid) { showError(validation.error); return; }
 
   const systemName = document.getElementById('system-name').value.trim() || 'System Name TBD';
   const responsibleParty = document.getElementById('responsible-party').value.trim() || 'TBD';
