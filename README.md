@@ -31,6 +31,14 @@ python app.py
 
 Open http://localhost:5000 in your browser.
 
+### Option 4: Run via Docker
+
+```bash
+docker run -p 5000:5000 -e ANTHROPIC_API_KEY=sk-ant-... ghcr.io/gdonarum/container-stig:latest
+```
+
+Open http://localhost:5000. The image is built automatically on each push to `main`.
+
 ## Features
 
 **Tab 1 — Findings Analyzer**
