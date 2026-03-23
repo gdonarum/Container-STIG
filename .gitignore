@@ -1,3 +1,9 @@
 __pycache__/
 *.pyc
 *.pyo
+
+# Local testing copy (created by workflow for GitHub Pages)
+static/sample_data/
+
+# Hardening output (generated during pipeline runs)
+hardening/output/
