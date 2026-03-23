@@ -46,13 +46,32 @@
 <body class="bg-gray-950 text-gray-100 min-h-screen">
 
   <!-- Header -->
-  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between">
+  <header class="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center justify-between flex-wrap gap-3">
     <div class="flex items-center gap-3">
       <div class="bg-blue-600 rounded px-2 py-1 text-xs font-bold tracking-widest mono">STIG</div>
       <h1 class="text-lg font-semibold tracking-tight">STIG Assist</h1>
-      <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">v1.0</span>
+      <span class="text-xs text-gray-500 bg-gray-800 px-2 py-0.5 rounded">v1.1</span>
     </div>
-    <div class="text-xs text-gray-500">Powered by Claude Sonnet</div>
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <label class="text-xs text-gray-400">API Key:</label>
+        <div class="relative">
+          <input id="api-key-input" type="password" placeholder="sk-ant-..."
+            class="w-48 bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs mono
+                   focus:outline-none focus:border-blue-500 placeholder-gray-600 pr-7" />
+          <button onclick="toggleApiKeyVisibility()" id="api-key-toggle"
+            class="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs">
+            👁
+          </button>
+        </div>
+        <label class="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+          <input type="checkbox" id="remember-key" class="rounded bg-gray-800 border-gray-700" />
+          <span>Remember</span>
+        </label>
+        <span id="api-key-status" class="text-xs px-1.5 py-0.5 rounded bg-red-900 text-red-300">Not Set</span>
+      </div>
+      <div class="text-xs text-gray-500">Powered by Claude Sonnet</div>
+    </div>
   </header>
 
   <!-- Tab Bar -->
@@ -293,6 +312,152 @@
   </div>
 
 <script>
+// ─── System Prompts ───────────────────────────────────────────────────────────
+const STIG_ANALYZE_PROMPT = `You are a DISA STIG expert and Docker security specialist assisting DevSecOps teams at defense contractors. Your role is to analyze STIG findings from Nessus/SCAP XML output or plain-text descriptions and provide actionable remediation guidance.
+
+## Core Responsibilities
+
+1. **Identify and categorize findings** per DISA severity definitions:
+   - CAT I: Any vulnerability that provides an attacker immediate access into a system with high privilege, or direct access to an enclave or Critical Information Infrastructure (CII). CVSS v3 base score 7.0+.
+   - CAT II: Any vulnerability that provides information that has a high potential of giving access to an attacker. CVSS v3 base score 4.0–6.9.
+   - CAT III: Any vulnerability that provides information that potentially could lead to compromise. CVSS v3 base score 0.1–3.9, or informational.
+
+2. **Provide plain English explanations** — assume the reader knows Docker and Linux but is not a STIG expert.
+
+3. **Generate Dockerfile fixes** where applicable — use minimal, surgical RUN/USER/COPY/ENV instructions consistent with CIS Docker Benchmark v1.6.
+
+4. **Acknowledge uncertainty** — if a STIG check ID is not recognized, say so explicitly. Do not hallucinate check details.
+
+5. **Flag human judgment requirements** — for decisions like "is this service required for mission?" or network policy choices, set requires_human_judgment=true and explain what the human needs to decide.
+
+## STIG Check ID Conventions
+- RHEL/container STIGs: V-XXXXXX format (e.g., V-230221)
+- SRG controls: SRG-OS-XXXXXX-GPOS-XXXXX
+- CIS Benchmark controls: CIS X.X.X
+
+## Dockerfile Best Practices (CIS Docker Benchmark)
+- Always use a non-root USER instruction
+- Avoid ADD; prefer COPY
+- Pin package versions where possible
+- Remove package caches in the same RUN layer (apt-get clean, dnf clean all)
+- Use --no-install-recommends with apt-get
+- Set HEALTHCHECK instructions
+- Avoid storing secrets in ENV or ARG
+- Use multi-stage builds to minimize final image attack surface
+
+## Output Format
+Always return valid JSON matching the schema specified in the user prompt. Do not include any markdown, explanation, or text outside the JSON object.`;
+
+const DOCKERFILE_HARDEN_PROMPT = `You are a Docker security hardening expert with deep knowledge of DISA STIGs,
+CIS Docker Benchmark, and container security best practices. You produce hardened Dockerfiles
+with inline comments explaining each security change.`;
+
+const POAM_GENERATE_PROMPT = `You are a DoD cybersecurity compliance expert specializing in
+Plan of Action & Milestones (POA&M) documentation for RMF packages. You produce
+clear, professional POA&M entries that meet DISA and NIST SP 800-37 requirements.`;
+
+const MODEL = 'claude-sonnet-4-20250514';
+
+// ─── API Key Management ───────────────────────────────────────────────────────
+let apiKey = '';
+
+function initApiKey() {
+  const savedKey = localStorage.getItem('stig_assist_api_key');
+  if (savedKey) {
+    apiKey = savedKey;
+    document.getElementById('api-key-input').value = savedKey;
+    document.getElementById('remember-key').checked = true;
+    updateApiKeyStatus(true);
+  }
+
+  document.getElementById('api-key-input').addEventListener('input', (e) => {
+    apiKey = e.target.value.trim();
+    updateApiKeyStatus(!!apiKey);
+    if (document.getElementById('remember-key').checked && apiKey) {
+      localStorage.setItem('stig_assist_api_key', apiKey);
+    }
+  });
+
+  document.getElementById('remember-key').addEventListener('change', (e) => {
+    if (e.target.checked && apiKey) {
+      localStorage.setItem('stig_assist_api_key', apiKey);
+    } else {
+      localStorage.removeItem('stig_assist_api_key');
+    }
+  });
+}
+
+function updateApiKeyStatus(isSet) {
+  const status = document.getElementById('api-key-status');
+  if (isSet) {
+    status.textContent = 'Set';
+    status.className = 'text-xs px-1.5 py-0.5 rounded bg-green-900 text-green-300';
+  } else {
+    status.textContent = 'Not Set';
+    status.className = 'text-xs px-1.5 py-0.5 rounded bg-red-900 text-red-300';
+  }
+}
+
+function toggleApiKeyVisibility() {
+  const input = document.getElementById('api-key-input');
+  const btn = document.getElementById('api-key-toggle');
+  if (input.type === 'password') {
+    input.type = 'text';
+    btn.textContent = '🙈';
+  } else {
+    input.type = 'password';
+    btn.textContent = '👁';
+  }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', initApiKey);
+
+// ─── Anthropic API Helper ─────────────────────────────────────────────────────
+async function callClaude(systemPrompt, userMessage) {
+  if (!apiKey) {
+    throw new Error('Please enter your Anthropic API key in the header.');
+  }
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 4096,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }]
+    })
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error?.message || `API error: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.content[0].text;
+}
+
+function extractJsonBlock(text) {
+  // Try ```json ... ``` block first
+  let match = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (match) {
+    return JSON.parse(match[1]);
+  }
+  // Try finding the first { ... } in the text
+  match = text.match(/(\{[\s\S]*\})/);
+  if (match) {
+    return JSON.parse(match[1]);
+  }
+  throw new Error('No JSON object found in response');
+}
+
 // ─── Tab Management ───────────────────────────────────────────────────────────
 function switchTab(name) {
   ['findings', 'harden', 'poam'].forEach(t => {
@@ -366,13 +531,10 @@ async function copyText(text) {
 // ─── Tab 1: Findings Analyzer ─────────────────────────────────────────────────
 async function loadSample() {
   try {
-    const r = await fetch('/api/sample');
-    const data = await r.json();
-    if (data.xml) {
-      document.getElementById('findings-input').value = data.xml;
-    } else {
-      showError(data.error || 'Failed to load sample');
-    }
+    const r = await fetch('sample_data/sample_findings.xml');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const xml = await r.text();
+    document.getElementById('findings-input').value = xml;
   } catch(e) {
     showError('Failed to load sample: ' + e.message);
   }
@@ -384,27 +546,55 @@ async function analyzeFindings() {
   const findingsText = document.getElementById('findings-input').value.trim();
   if (!findingsText) { showError('Please enter findings text or XML.'); return; }
 
+  const baseImage = document.getElementById('base-image').value.trim() || 'Not specified';
+  const containerPurpose = document.getElementById('container-purpose').value.trim() || 'Not specified';
+
   setLoading('btn-analyze', true, 'Analyze Findings');
   document.getElementById('findings-placeholder').classList.add('hidden');
   document.getElementById('findings-output').classList.add('hidden');
   document.getElementById('hardened-section').classList.add('hidden');
 
+  const userMessage = `Analyze the following STIG findings for a Docker container.
+
+Base Image: ${baseImage}
+Container Purpose: ${containerPurpose}
+
+Findings:
+${findingsText}
+
+Return a JSON object with this exact structure:
+{
+  "summary": {
+    "overall_risk": "HIGH|MEDIUM|LOW",
+    "cat1_count": 0,
+    "cat2_count": 0,
+    "cat3_count": 0,
+    "narrative": "2-3 sentence plain English risk posture summary"
+  },
+  "findings": [
+    {
+      "check_id": "V-XXXXXX or unknown",
+      "severity": "CAT I|CAT II|CAT III",
+      "title": "Short title",
+      "plain_english": "What this finding means in plain language",
+      "remediation": "Step-by-step remediation guidance",
+      "dockerfile_fix": "RUN ... or null if not applicable",
+      "requires_human_judgment": false,
+      "human_judgment_note": null
+    }
+  ],
+  "hardened_dockerfile": "# Complete Dockerfile with all applicable fixes\\nFROM ${baseImage === 'Not specified' ? 'your-base-image' : baseImage}\\n..."
+}
+
+IMPORTANT: Return only the JSON object, no markdown, no explanation.`;
+
   try {
-    const resp = await fetch('/api/analyze', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        findings_text: findingsText,
-        base_image: document.getElementById('base-image').value.trim(),
-        container_purpose: document.getElementById('container-purpose').value.trim(),
-      })
-    });
-    const data = await resp.json();
-    if (!resp.ok) { showError(data.error || 'Analysis failed'); return; }
+    const raw = await callClaude(STIG_ANALYZE_PROMPT, userMessage);
+    const data = extractJsonBlock(raw);
     lastAnalysisResult = data;
     renderFindingsResults(data);
   } catch(e) {
-    showError('Network error: ' + e.message);
+    showError(e.message);
   } finally {
     setLoading('btn-analyze', false, 'Analyze Findings');
   }
@@ -508,26 +698,49 @@ async function hardenDockerfile() {
   const dockerfile = document.getElementById('dockerfile-input').value.trim();
   if (!dockerfile) { showError('Please paste a Dockerfile.'); return; }
 
+  const stigTarget = document.getElementById('stig-target').value;
+
   setLoading('btn-harden', true, 'Harden Dockerfile');
   document.getElementById('harden-placeholder').classList.add('hidden');
   document.getElementById('harden-output').classList.add('hidden');
   document.getElementById('diff-section').classList.add('hidden');
 
+  const userMessage = `Harden the following Dockerfile against: ${stigTarget}
+
+Original Dockerfile:
+\`\`\`
+${dockerfile}
+\`\`\`
+
+Rules:
+1. Make minimal, surgical changes — do not rewrite unnecessarily
+2. Add inline comments before each hardening change explaining the STIG/CIS control
+3. Use RUN, USER, and COPY best practices
+4. Preserve the original functionality
+
+Return a JSON object with this exact structure:
+{
+  "hardened_dockerfile": "# Complete hardened Dockerfile content here",
+  "changes": [
+    {
+      "line_reference": "approx line or instruction",
+      "change_type": "ADDED|MODIFIED|REMOVED",
+      "description": "What was changed and why",
+      "stig_reference": "V-XXXXXX or CIS X.X or descriptive reference"
+    }
+  ],
+  "warnings": ["any warnings about findings requiring manual review"]
+}
+
+IMPORTANT: Return only the JSON object, no markdown wrapper.`;
+
   try {
-    const resp = await fetch('/api/harden', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        dockerfile,
-        stig_target: document.getElementById('stig-target').value,
-      })
-    });
-    const data = await resp.json();
-    if (!resp.ok) { showError(data.error || 'Hardening failed'); return; }
+    const raw = await callClaude(DOCKERFILE_HARDEN_PROMPT, userMessage);
+    const data = extractJsonBlock(raw);
     lastHardenResult = data;
     renderHardenResults(data, dockerfile);
   } catch(e) {
-    showError('Network error: ' + e.message);
+    showError(e.message);
   } finally {
     setLoading('btn-harden', false, 'Harden Dockerfile');
   }
@@ -595,27 +808,57 @@ async function generatePoam() {
   const findingsText = document.getElementById('poam-input').value.trim();
   if (!findingsText) { showError('Please enter findings text.'); return; }
 
+  const systemName = document.getElementById('system-name').value.trim() || 'System Name TBD';
+  const responsibleParty = document.getElementById('responsible-party').value.trim() || 'TBD';
+
   setLoading('btn-poam', true, 'Generate POA&M');
   document.getElementById('poam-placeholder').classList.add('hidden');
   document.getElementById('poam-output').classList.add('hidden');
   document.getElementById('poam-export-section').classList.add('hidden');
 
+  const userMessage = `Generate POA&M entries for the following STIG findings.
+
+System Name: ${systemName}
+Responsible Party: ${responsibleParty}
+
+Findings:
+${findingsText}
+
+Return a JSON object with this structure:
+{
+  "poam_entries": [
+    {
+      "poam_id": "POAM-001",
+      "check_id": "V-XXXXXX or derived",
+      "weakness_name": "Short weakness title",
+      "weakness_description": "Clear description of the vulnerability and its impact",
+      "severity": "CAT I|CAT II|CAT III",
+      "resources_required": "Description of resources needed for remediation",
+      "scheduled_completion_date": "LEAVE_BLANK",
+      "milestones": [
+        {
+          "milestone_number": 1,
+          "milestone_description": "Specific actionable milestone",
+          "completion_date": "LEAVE_BLANK"
+        }
+      ],
+      "responsible_party": "${responsibleParty}",
+      "status": "Ongoing",
+      "comments": "Any relevant notes or caveats"
+    }
+  ],
+  "plain_text_export": "Complete POA&M formatted as plain text for copy-paste"
+}
+
+IMPORTANT: Return only the JSON object. Leave all date fields as the literal string LEAVE_BLANK.`;
+
   try {
-    const resp = await fetch('/api/poam', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        findings_text: findingsText,
-        system_name: document.getElementById('system-name').value.trim(),
-        responsible_party: document.getElementById('responsible-party').value.trim(),
-      })
-    });
-    const data = await resp.json();
-    if (!resp.ok) { showError(data.error || 'POA&M generation failed'); return; }
+    const raw = await callClaude(POAM_GENERATE_PROMPT, userMessage);
+    const data = extractJsonBlock(raw);
     lastPoamResult = data;
     renderPoamResults(data);
   } catch(e) {
-    showError('Network error: ' + e.message);
+    showError(e.message);
   } finally {
     setLoading('btn-poam', false, 'Generate POA&M');
   }

@@ -1,0 +1,185 @@
+name: Harden Base Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_image:
+        description: 'Base image to harden'
+        required: true
+        type: choice
+        options:
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - alpine:3.19
+          - redhat/ubi9:latest
+          - all
+      stig_target:
+        description: 'STIG/CIS target'
+        required: true
+        default: 'DISA Container Platform SRG'
+        type: choice
+        options:
+          - DISA Container Platform SRG
+          - CIS Docker Benchmark v1.6
+          - Ubuntu 22.04 STIG
+          - Ubuntu 24.04 STIG
+          - RHEL 9 STIG
+      skip_scan:
+        description: 'Skip Trivy vulnerability scan'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/hardened-bases
+
+jobs:
+  setup:
+    name: Setup Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up build matrix
+        id: set-matrix
+        run: |
+          if [ "${{ inputs.base_image }}" = "all" ]; then
+            # Build all images from catalog
+            IMAGES=$(jq -c '[.images[].name]' hardening/base-images.json)
+          else
+            # Build single image
+            IMAGES='["${{ inputs.base_image }}"]'
+          fi
+          echo "matrix={\"image\":$IMAGES}" >> $GITHUB_OUTPUT
+
+  harden:
+    name: Harden ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.setup.outputs.matrix) }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install anthropic
+
+      - name: Determine output tag
+        id: tag
+        run: |
+          # Convert image name to safe tag (e.g., ubuntu:22.04 -> ubuntu-22.04-hardened)
+          TAG=$(echo "${{ matrix.image }}" | sed 's/[:/]/-/g')-hardened
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Output tag: $TAG"
+
+      - name: Determine STIG target
+        id: stig
+        run: |
+          # Use input or lookup from catalog
+          if [ "${{ inputs.base_image }}" = "all" ]; then
+            # Lookup STIG target from catalog
+            TARGET=$(jq -r --arg img "${{ matrix.image }}" '.images[] | select(.name == $img) | .stig_target' hardening/base-images.json)
+            if [ -z "$TARGET" ] || [ "$TARGET" = "null" ]; then
+              TARGET="${{ inputs.stig_target }}"
+            fi
+          else
+            TARGET="${{ inputs.stig_target }}"
+          fi
+          echo "target=$TARGET" >> $GITHUB_OUTPUT
+          echo "STIG target: $TARGET"
+
+      - name: Generate hardened Dockerfile
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p hardening/output
+          python hardening/harden.py \
+            --base-image "${{ matrix.image }}" \
+            --stig-target "${{ steps.stig.outputs.target }}" \
+            --output-dir "hardening/output/${{ steps.tag.outputs.tag }}" \
+            --output-json "hardening/output/${{ steps.tag.outputs.tag }}/changes.json"
+
+      - name: Upload Dockerfile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockerfile-${{ steps.tag.outputs.tag }}
+          path: hardening/output/${{ steps.tag.outputs.tag }}/
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: hardening/output/${{ steps.tag.outputs.tag }}
+          push: false
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=STIG-hardened ${{ matrix.image }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Scan with Trivy
+        if: ${{ !inputs.skip_scan }}
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+          format: 'table'
+          exit-code: '0'  # Don't fail on vulnerabilities, just report
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          output: 'trivy-results-${{ steps.tag.outputs.tag }}.txt'
+
+      - name: Upload Trivy scan results
+        if: ${{ !inputs.skip_scan }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-${{ steps.tag.outputs.tag }}
+          path: trivy-results-${{ steps.tag.outputs.tag }}.txt
+
+      - name: Push image to GHCR
+        uses: docker/build-push-action@v5
+        with:
+          context: hardening/output/${{ steps.tag.outputs.tag }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}-${{ github.run_number }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.description=STIG-hardened ${{ matrix.image }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Summary
+        run: |
+          echo "## Hardened Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Base Image:** ${{ matrix.image }}" >> $GITHUB_STEP_SUMMARY
+          echo "**STIG Target:** ${{ steps.stig.outputs.target }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Output Tag:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull Command" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

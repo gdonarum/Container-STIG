@@ -90,11 +90,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure Pages index
+      - name: Prepare static site
         run: |
-          # Inject a banner on the Pages build noting backend is required
-          cp static/index.html static/index.html.bak
-          sed -i 's|const API_BASE = .*|const API_BASE = "";  // Set to your backend URL to enable API calls|' static/index.html || true
+          # Copy sample data into static folder for client-side access
+          mkdir -p static/sample_data
+          cp sample_data/sample_findings.xml static/sample_data/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
