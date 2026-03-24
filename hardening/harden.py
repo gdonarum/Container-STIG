@@ -21,8 +21,19 @@ import anthropic
 MODEL = "claude-sonnet-4-20250514"
 
 DOCKERFILE_HARDEN_PROMPT = """You are a Docker security hardening expert with deep knowledge of DISA STIGs,
-CIS Docker Benchmark, and container security best practices. You produce hardened Dockerfiles
-with inline comments explaining each security change."""
+CIS Docker Benchmark, OWASP Docker Security Cheat Sheet, and container security best practices.
+You produce hardened Dockerfiles with inline comments explaining each security change.
+
+Apply the following principles when hardening:
+- Use small, minimal base images (distroless, slim, or alpine variants) to reduce attack surface (OWASP Rule 4)
+- Use multi-stage builds to prevent secrets or build artifacts from leaking into production images (OWASP Rule 5)
+- Install only production dependencies; remove dev tools and package caches in the same RUN layer (OWASP Rule 6)
+- Create and switch to a non-root user; set minimal file permissions (CIS 4.1)
+- Set a HEALTHCHECK instruction (CIS 4.6)
+- Never store secrets in ENV or ARG; require them at runtime (CIS 4.9)
+- Prefer COPY over ADD to avoid unintended remote URL fetches (CIS 4.9)
+- Pin package versions and use lockfiles for deterministic, reproducible builds (OWASP Rule 10)
+- Use read-only filesystem where possible (--read-only flag or read-only volume mounts) (OWASP Rule 8)"""
 
 
 def extract_json_block(text: str) -> dict:

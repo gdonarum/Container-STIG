@@ -33,6 +33,13 @@ jobs:
           ANTHROPIC_API_KEY: test-key-not-real
         run: python -m pytest tests/ -v
 
+      # OWASP Docker Security Rule 2: Use security linting in CI/CD pipelines
+      - name: Lint Dockerfile with Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+          failure-threshold: warning
+
   build-and-publish:
     name: Build & Push Container
     runs-on: ubuntu-latest
@@ -64,6 +71,25 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Build image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # OWASP Docker Security Rule 3: Use container scanning tools
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:scan
+          format: 'table'
+          exit-code: '0'
+          severity: 'CRITICAL,HIGH'
 
       - name: Build and push image
         uses: docker/build-push-action@v5
