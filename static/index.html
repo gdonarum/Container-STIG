@@ -91,6 +91,10 @@
       class="tab-inactive py-3 text-sm font-medium transition-colors">
       POA&amp;M Helper
     </button>
+    <button onclick="switchTab('builder')" id="tab-builder"
+      class="tab-inactive py-3 text-sm font-medium transition-colors">
+      Image Builder
+    </button>
   </nav>
 
   <main class="max-w-7xl mx-auto px-4 py-6">
@@ -303,6 +307,97 @@
       </div>
     </div>
 
+    <!-- ====== TAB 4: IMAGE BUILDER ====== -->
+    <div id="panel-builder" class="tab-panel hidden">
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Input -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Input</h2>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Source Image</label>
+            <input id="builder-source-image" type="text" placeholder="e.g. postgres:16, nginx:alpine, ubuntu:22.04"
+              list="builder-image-suggestions"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mono
+                     focus:outline-none focus:border-blue-500 placeholder-gray-600" />
+            <datalist id="builder-image-suggestions">
+              <option value="postgres:16">
+              <option value="postgres:15-alpine">
+              <option value="nginx:alpine">
+              <option value="nginx:latest">
+              <option value="ubuntu:22.04">
+              <option value="ubuntu:24.04">
+              <option value="alpine:3.19">
+              <option value="redhat/ubi9:latest">
+              <option value="redhat/ubi8:latest">
+              <option value="python:3.12-slim">
+              <option value="node:20-alpine">
+              <option value="openjdk:21-jdk-slim">
+              <option value="redis:7-alpine">
+              <option value="mysql:8.0">
+            </datalist>
+            <p class="text-xs text-gray-600 mt-1">Enter any public image name. Common images suggested above.</p>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Target STIG / SRG</label>
+            <select id="builder-stig-target"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                     focus:outline-none focus:border-blue-500">
+              <option>DISA Container Platform SRG</option>
+              <option>RHEL 8 STIG</option>
+              <option>RHEL 9 STIG</option>
+              <option>Ubuntu 20.04 STIG</option>
+              <option>Ubuntu 22.04 STIG</option>
+              <option>CIS Docker Benchmark v1.6</option>
+            </select>
+          </div>
+
+          <button onclick="buildHardenedImage()"
+            class="w-full bg-blue-600 hover:bg-blue-500 active:bg-blue-700 transition-colors
+                   rounded py-2.5 text-sm font-semibold flex items-center justify-center gap-2"
+            id="btn-builder">
+            Build Hardened Image
+          </button>
+
+          <div class="bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-500 space-y-1">
+            <div class="text-gray-400 font-semibold mb-1">How it works</div>
+            <div>1. Enter any public Docker image (e.g. <span class="mono text-gray-300">postgres:16</span>)</div>
+            <div>2. Claude generates a hardened Dockerfile with STIG/CIS controls applied</div>
+            <div>3. Review the changes and download the hardened Dockerfile</div>
+          </div>
+        </div>
+
+        <!-- Results -->
+        <div class="space-y-4">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Results</h2>
+          <div id="builder-placeholder" class="text-gray-600 text-sm mt-8 text-center">
+            Enter a source image and click Build to generate a hardened Dockerfile.
+          </div>
+          <div id="builder-output" class="hidden space-y-4">
+            <div id="builder-warnings" class="hidden"></div>
+            <div>
+              <div class="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Hardening Changes</div>
+              <div id="builder-changes" class="space-y-2"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Hardened Dockerfile Output -->
+      <div id="builder-dockerfile-section" class="hidden mt-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Hardened Dockerfile</h2>
+          <button onclick="copyBuilderDockerfile()"
+            class="text-xs text-blue-400 hover:text-blue-300 transition-colors">
+            Copy to Clipboard
+          </button>
+        </div>
+        <pre id="builder-dockerfile" class="mono bg-gray-900 border border-gray-700 rounded p-4
+             text-xs text-green-300 overflow-x-auto whitespace-pre-wrap"></pre>
+      </div>
+    </div>
+
   </main>
 
   <!-- Global Error Toast -->
@@ -474,7 +569,7 @@ function extractJsonBlock(text) {
 
 // ─── Tab Management ───────────────────────────────────────────────────────────
 function switchTab(name) {
-  ['findings', 'harden', 'poam'].forEach(t => {
+  ['findings', 'harden', 'poam', 'builder'].forEach(t => {
     document.getElementById('panel-' + t).classList.add('hidden');
     document.getElementById('tab-' + t).className = 'tab-inactive py-3 text-sm font-medium transition-colors';
   });
@@ -995,6 +1090,92 @@ function renderPoamResults(data) {
 async function copyPoam() {
   const text = document.getElementById('poam-text').textContent;
   await copyText(text);
+}
+
+
+// ─── Tab 4: Image Builder ─────────────────────────────────────────────────────
+let lastBuilderResult = null;
+
+async function buildHardenedImage() {
+  const sourceImage = document.getElementById('builder-source-image').value.trim();
+  const validation = validateInput(sourceImage, 'a source image name');
+  if (!validation.valid) { showError(validation.error); return; }
+
+  const stigTarget = document.getElementById('builder-stig-target').value;
+
+  setLoading('btn-builder', true, 'Build Hardened Image');
+  document.getElementById('builder-placeholder').classList.add('hidden');
+  document.getElementById('builder-output').classList.add('hidden');
+  document.getElementById('builder-dockerfile-section').classList.add('hidden');
+
+  try {
+    const resp = await fetch('/api/harden-image', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_image: sourceImage, stig_target: stigTarget })
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.error || `Server error: ${resp.status}`);
+    }
+    const data = await resp.json();
+    lastBuilderResult = data;
+    renderBuilderResults(data);
+  } catch(e) {
+    showError(e.message);
+    document.getElementById('builder-placeholder').classList.remove('hidden');
+  } finally {
+    setLoading('btn-builder', false, 'Build Hardened Image');
+  }
+}
+
+function renderBuilderResults(data) {
+  const out = document.getElementById('builder-output');
+  const changes = document.getElementById('builder-changes');
+  changes.innerHTML = '';
+
+  // Warnings
+  const warnDiv = document.getElementById('builder-warnings');
+  if (data.warnings && data.warnings.length > 0) {
+    warnDiv.classList.remove('hidden');
+    warnDiv.innerHTML = data.warnings.map(w =>
+      `<div class="bg-amber-950 border border-amber-800 rounded px-3 py-2 text-xs text-amber-200 flex gap-2">
+        <span class="text-amber-400">⚠</span> ${escapeHtml(w)}
+      </div>`
+    ).join('');
+  } else {
+    warnDiv.classList.add('hidden');
+  }
+
+  // Changes list
+  (data.changes || []).forEach(c => {
+    const typeColor = c.change_type === 'ADDED' ? 'text-green-400' :
+                      c.change_type === 'REMOVED' ? 'text-red-400' : 'text-amber-400';
+    changes.innerHTML += `
+      <div class="bg-gray-800 border border-gray-700 rounded px-3 py-2 text-xs fade-in">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="${typeColor} font-mono font-bold">${escapeHtml(c.change_type)}</span>
+          <span class="text-gray-500 mono">${escapeHtml(c.line_reference || '')}</span>
+          <span class="text-gray-500">·</span>
+          <span class="text-blue-400 mono">${escapeHtml(c.stig_reference || '')}</span>
+        </div>
+        <p class="text-gray-300">${escapeHtml(c.description || '')}</p>
+      </div>`;
+  });
+
+  out.classList.remove('hidden');
+
+  // Hardened Dockerfile
+  if (data.hardened_dockerfile) {
+    document.getElementById('builder-dockerfile').textContent = data.hardened_dockerfile;
+    document.getElementById('builder-dockerfile-section').classList.remove('hidden');
+  }
+}
+
+async function copyBuilderDockerfile() {
+  if (lastBuilderResult && lastBuilderResult.hardened_dockerfile) {
+    await copyText(lastBuilderResult.hardened_dockerfile);
+  }
 }
 </script>
 </body>

@@ -258,6 +258,70 @@ IMPORTANT: Return only the JSON object. Leave all date fields as the literal str
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/harden-image", methods=["POST"])
+def harden_image():
+    """Tab 4: Build a hardened Dockerfile from a source image name."""
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Request body must be JSON"}), 400
+
+    source_image = (data.get("source_image") or "").strip()
+    stig_target = (data.get("stig_target") or "DISA Container Platform SRG").strip()
+
+    if not source_image:
+        return jsonify({"error": "source_image is required"}), 400
+
+    system_prompt = """You are a Docker security hardening expert with deep knowledge of DISA STIGs,
+CIS Docker Benchmark, and container security best practices. You produce hardened Dockerfiles
+with inline comments explaining each security change."""
+
+    user_message = f"""Create a STIG-hardened Dockerfile for the following source image: {source_image}
+Target standard: {stig_target}
+
+Generate a production-ready hardened Dockerfile that:
+1. Uses {source_image} as the base image
+2. Applies all relevant STIG/CIS hardening controls for this image type
+3. Adds inline comments before each hardening change explaining the STIG/CIS control
+4. Creates a non-root user and switches to it (unless the service requires root to function)
+5. Removes unnecessary packages, tools, and cleans caches in the same RUN layer
+6. Sets appropriate file permissions and ownership
+7. Adds a HEALTHCHECK instruction appropriate for this image
+8. Minimizes the attack surface while preserving the image's core functionality
+
+Return a JSON object with this exact structure:
+{{
+  "hardened_dockerfile": "# Complete hardened Dockerfile content here",
+  "changes": [
+    {{
+      "line_reference": "approx line or instruction",
+      "change_type": "ADDED|MODIFIED|REMOVED",
+      "description": "What was changed and why",
+      "stig_reference": "V-XXXXXX or CIS X.X or descriptive reference"
+    }}
+  ],
+  "warnings": ["any warnings about findings requiring manual review"]
+}}
+
+IMPORTANT: Return only the JSON object, no markdown wrapper."""
+
+    try:
+        response = client.messages.create(
+            model=MODEL,
+            max_tokens=4096,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_message}],
+        )
+        raw = response.content[0].text
+        result = extract_json_block(raw)
+        return jsonify(result)
+    except json.JSONDecodeError as e:
+        return jsonify({"error": f"AI returned invalid JSON: {e}", "raw": raw}), 500
+    except anthropic.APIError as e:
+        return jsonify({"error": f"Anthropic API error: {e}"}), 502
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/sample", methods=["GET"])
 def get_sample():
     """Return the sample findings XML for testing."""

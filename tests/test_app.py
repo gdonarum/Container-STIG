@@ -155,6 +155,64 @@ class TestRoutes(unittest.TestCase):
         self.assertIn("poam_entries", data)
         self.assertEqual(data["poam_entries"][0]["poam_id"], "POAM-001")
 
+    # ── /api/harden-image ────────────────────────────────────────────────────
+    def test_harden_image_missing_source(self):
+        resp = self.client.post("/api/harden-image", json={"source_image": ""})
+        self.assertEqual(resp.status_code, 400)
+        data = json.loads(resp.data)
+        self.assertIn("error", data)
+
+    def test_harden_image_missing_body(self):
+        resp = self.client.post("/api/harden-image", data="not json",
+                                content_type="text/plain")
+        self.assertEqual(resp.status_code, 400)
+
+    def test_harden_image_success(self):
+        fake_response_text = json.dumps({
+            "hardened_dockerfile": "FROM postgres:16\n# CIS 4.1 - run as non-root\nUSER postgres",
+            "changes": [
+                {
+                    "line_reference": "end of file",
+                    "change_type": "ADDED",
+                    "description": "Switch to non-root postgres user",
+                    "stig_reference": "CIS 4.1"
+                }
+            ],
+            "warnings": []
+        })
+
+        mock_content = MagicMock()
+        mock_content.text = fake_response_text
+        mock_message = MagicMock()
+        mock_message.content = [mock_content]
+
+        with patch.object(stig_app.client.messages, "create", return_value=mock_message):
+            resp = self.client.post("/api/harden-image",
+                                    json={"source_image": "postgres:16"})
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertIn("hardened_dockerfile", data)
+        self.assertIn("changes", data)
+        self.assertIn("postgres:16", data["hardened_dockerfile"])
+
+    def test_harden_image_uses_default_stig_target(self):
+        """Omitting stig_target should still succeed using the default."""
+        fake_response_text = json.dumps({
+            "hardened_dockerfile": "FROM nginx:alpine\nUSER 1001",
+            "changes": [],
+            "warnings": []
+        })
+
+        mock_content = MagicMock()
+        mock_content.text = fake_response_text
+        mock_message = MagicMock()
+        mock_message.content = [mock_content]
+
+        with patch.object(stig_app.client.messages, "create", return_value=mock_message):
+            resp = self.client.post("/api/harden-image",
+                                    json={"source_image": "nginx:alpine"})
+        self.assertEqual(resp.status_code, 200)
+
     # ── extract_json_block helper ─────────────────────────────────────────────
     def test_extract_json_block_from_markdown(self):
         text = '```json\n{"key": "value"}\n```'
