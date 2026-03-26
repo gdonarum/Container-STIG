@@ -260,26 +260,34 @@ IMPORTANT: Return only the JSON object. Leave all date fields as the literal str
 
 @app.route("/api/harden-image", methods=["POST"])
 def harden_image():
-    """Tab 4: Build a hardened Dockerfile from a source image name."""
+    """Tab 4: Build a hardened Dockerfile from a base OS + app selection or source image name."""
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
 
+    base_os = (data.get("base_os") or "").strip()
+    base_app = (data.get("base_app") or "").strip()
     source_image = (data.get("source_image") or "").strip()
     stig_target = (data.get("stig_target") or "DISA Container Platform SRG").strip()
 
-    if not source_image:
-        return jsonify({"error": "source_image is required"}), 400
+    if base_os:
+        source_description = base_os
+        if base_app:
+            source_description = f"{base_os} with {base_app}"
+    elif source_image:
+        source_description = source_image
+    else:
+        return jsonify({"error": "Either base_os or source_image is required"}), 400
 
     system_prompt = """You are a Docker security hardening expert with deep knowledge of DISA STIGs,
 CIS Docker Benchmark, and container security best practices. You produce hardened Dockerfiles
 with inline comments explaining each security change."""
 
-    user_message = f"""Create a STIG-hardened Dockerfile for the following source image: {source_image}
+    user_message = f"""Create a STIG-hardened Dockerfile for: {source_description}
 Target standard: {stig_target}
 
 Generate a production-ready hardened Dockerfile that:
-1. Uses {source_image} as the base image
+1. Uses an appropriate base image for {source_description}
 2. Applies all relevant STIG/CIS hardening controls for this image type
 3. Adds inline comments before each hardening change explaining the STIG/CIS control
 4. Creates a non-root user and switches to it (unless the service requires root to function)

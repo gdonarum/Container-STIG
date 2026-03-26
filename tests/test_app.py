@@ -162,6 +162,52 @@ class TestRoutes(unittest.TestCase):
         data = json.loads(resp.data)
         self.assertIn("error", data)
 
+    def test_harden_image_with_base_os_and_app(self):
+        fake_response_text = json.dumps({
+            "hardened_dockerfile": "FROM oraclelinux:9\n# Install Java 25\nRUN microdnf install java-25\nUSER 1001",
+            "changes": [
+                {
+                    "line_reference": "end of file",
+                    "change_type": "ADDED",
+                    "description": "Switch to non-root user",
+                    "stig_reference": "CIS 4.1"
+                }
+            ],
+            "warnings": []
+        })
+
+        mock_content = MagicMock()
+        mock_content.text = fake_response_text
+        mock_message = MagicMock()
+        mock_message.content = [mock_content]
+
+        with patch.object(stig_app.client.messages, "create", return_value=mock_message):
+            resp = self.client.post("/api/harden-image",
+                                    json={"base_os": "Oracle Linux 9", "base_app": "Java 25"})
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertIn("hardened_dockerfile", data)
+        self.assertIn("changes", data)
+
+    def test_harden_image_with_base_os_only(self):
+        fake_response_text = json.dumps({
+            "hardened_dockerfile": "FROM oraclelinux:9\nUSER 1001",
+            "changes": [],
+            "warnings": []
+        })
+
+        mock_content = MagicMock()
+        mock_content.text = fake_response_text
+        mock_message = MagicMock()
+        mock_message.content = [mock_content]
+
+        with patch.object(stig_app.client.messages, "create", return_value=mock_message):
+            resp = self.client.post("/api/harden-image",
+                                    json={"base_os": "Oracle Linux 9"})
+        self.assertEqual(resp.status_code, 200)
+        data = json.loads(resp.data)
+        self.assertIn("hardened_dockerfile", data)
+
     def test_harden_image_missing_body(self):
         resp = self.client.post("/api/harden-image", data="not json",
                                 content_type="text/plain")
