@@ -315,28 +315,36 @@
           <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Input</h2>
 
           <div>
-            <label class="block text-xs text-gray-400 mb-1">Source Image</label>
-            <input id="builder-source-image" type="text" placeholder="e.g. postgres:16, nginx:alpine, ubuntu:22.04"
-              list="builder-image-suggestions"
-              class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mono
-                     focus:outline-none focus:border-blue-500 placeholder-gray-600" />
-            <datalist id="builder-image-suggestions">
-              <option value="postgres:16">
-              <option value="postgres:15-alpine">
-              <option value="nginx:alpine">
-              <option value="nginx:latest">
-              <option value="ubuntu:22.04">
-              <option value="ubuntu:24.04">
-              <option value="alpine:3.19">
-              <option value="redhat/ubi9:latest">
-              <option value="redhat/ubi8:latest">
-              <option value="python:3.12-slim">
-              <option value="node:20-alpine">
-              <option value="openjdk:21-jdk-slim">
-              <option value="redis:7-alpine">
-              <option value="mysql:8.0">
-            </datalist>
-            <p class="text-xs text-gray-600 mt-1">Enter any public image name. Common images suggested above.</p>
+            <label class="block text-xs text-gray-400 mb-1">Base OS</label>
+            <select id="builder-base-os"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                     focus:outline-none focus:border-blue-500">
+              <option value="Oracle Linux 9">Oracle Linux 9</option>
+              <option value="Oracle Linux 8">Oracle Linux 8</option>
+              <option value="Red Hat UBI 9">Red Hat UBI 9</option>
+              <option value="Red Hat UBI 8">Red Hat UBI 8</option>
+              <option value="Ubuntu 24.04">Ubuntu 24.04</option>
+              <option value="Ubuntu 22.04">Ubuntu 22.04</option>
+              <option value="Alpine 3.19">Alpine 3.19</option>
+              <option value="Debian 12 (Bookworm)">Debian 12 (Bookworm)</option>
+            </select>
+          </div>
+
+          <div>
+            <label class="block text-xs text-gray-400 mb-1">Base Application</label>
+            <select id="builder-base-app"
+              class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm
+                     focus:outline-none focus:border-blue-500">
+              <option value="">None (base OS only)</option>
+              <option value="Java 25">Java 25</option>
+              <option value="Java 21 (LTS)">Java 21 (LTS)</option>
+              <option value="Python 3.12">Python 3.12</option>
+              <option value="Node.js 22 (LTS)">Node.js 22 (LTS)</option>
+              <option value="Go 1.22">Go 1.22</option>
+              <option value="Nginx">Nginx</option>
+              <option value="PostgreSQL 16">PostgreSQL 16</option>
+              <option value="Redis 7">Redis 7</option>
+            </select>
           </div>
 
           <div>
@@ -362,9 +370,10 @@
 
           <div class="bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-500 space-y-1">
             <div class="text-gray-400 font-semibold mb-1">How it works</div>
-            <div>1. Enter any public Docker image (e.g. <span class="mono text-gray-300">postgres:16</span>)</div>
-            <div>2. Claude generates a hardened Dockerfile with STIG/CIS controls applied</div>
-            <div>3. Review the changes and download the hardened Dockerfile</div>
+            <div>1. Choose a Base OS (e.g. <span class="mono text-gray-300">Oracle Linux 9</span>)</div>
+            <div>2. Optionally select a Base Application (e.g. <span class="mono text-gray-300">Java 25</span>)</div>
+            <div>3. Claude generates a hardened Dockerfile with STIG/CIS controls applied</div>
+            <div>4. Review the changes and copy the hardened Dockerfile</div>
           </div>
         </div>
 
@@ -372,7 +381,7 @@
         <div class="space-y-4">
           <h2 class="text-sm font-semibold text-gray-400 uppercase tracking-wider">Results</h2>
           <div id="builder-placeholder" class="text-gray-600 text-sm mt-8 text-center">
-            Enter a source image and click Build to generate a hardened Dockerfile.
+            Select a Base OS and Base Application, then click Build to generate a hardened Dockerfile.
           </div>
           <div id="builder-output" class="hidden space-y-4">
             <div id="builder-warnings" class="hidden"></div>
@@ -1097,11 +1106,11 @@ async function copyPoam() {
 let lastBuilderResult = null;
 
 async function buildHardenedImage() {
-  const sourceImage = document.getElementById('builder-source-image').value.trim();
-  const validation = validateInput(sourceImage, 'a source image name');
-  if (!validation.valid) { showError(validation.error); return; }
-
+  const baseOs = document.getElementById('builder-base-os').value.trim();
+  const baseApp = document.getElementById('builder-base-app').value.trim();
   const stigTarget = document.getElementById('builder-stig-target').value;
+
+  if (!baseOs) { showError('Please select a Base OS.'); return; }
 
   setLoading('btn-builder', true, 'Build Hardened Image');
   document.getElementById('builder-placeholder').classList.add('hidden');
@@ -1112,7 +1121,7 @@ async function buildHardenedImage() {
     const resp = await fetch('/api/harden-image', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ source_image: sourceImage, stig_target: stigTarget })
+      body: JSON.stringify({ base_os: baseOs, base_app: baseApp, stig_target: stigTarget })
     });
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({}));
